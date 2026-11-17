@@ -1,0 +1,6 @@
+{
+  "name": "Newsie",
+  "description": "An editorial news aggregation reader with customizable categories, source subscriptions, and structured reading preferences.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
