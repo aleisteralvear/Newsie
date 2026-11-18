@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Lock, RefreshCw, ShieldCheck } from 'lucide-react';
 import { NavTab, WorkspaceSummary } from '../../core/common/types';
 
@@ -7,6 +8,9 @@ interface TopBarProps {
   onRefresh: () => void;
   isRefreshing: boolean;
   activeWorkspace: WorkspaceSummary | null;
+  doubleTapIntervalMs?: number;
+  onTriggerPrivateAccess?: () => void;
+  onOpenDashboard?: () => void;
   onLockWorkspace?: () => void;
 }
 
@@ -24,9 +28,39 @@ export function TopBar({
   onRefresh,
   isRefreshing,
   activeWorkspace,
+  doubleTapIntervalMs = 350,
+  onTriggerPrivateAccess,
+  onOpenDashboard,
   onLockWorkspace,
 }: TopBarProps) {
-  const isPrivateActive = Boolean(activeWorkspace?.isPrivate);
+  const isPrivateActive = Boolean(
+    activeWorkspace?.isPrivate && !activeWorkspace.isLocked,
+  );
+  const lastSearchTapRef = useRef<number>(0);
+
+  const handleNavClick = (id: NavTab) => {
+    onSelectTab(id);
+    if (id !== 'search' || !onTriggerPrivateAccess) return;
+
+    const now = Date.now();
+    if (
+      lastSearchTapRef.current > 0 &&
+      now - lastSearchTapRef.current <= doubleTapIntervalMs
+    ) {
+      lastSearchTapRef.current = 0;
+      onTriggerPrivateAccess();
+      return;
+    }
+    lastSearchTapRef.current = now;
+  };
+
+  const handleNavKeyDown = (e: React.KeyboardEvent, id: NavTab) => {
+    if (id === 'search' && e.shiftKey && e.key === 'Enter' && onTriggerPrivateAccess) {
+      e.preventDefault();
+      lastSearchTapRef.current = 0;
+      onTriggerPrivateAccess();
+    }
+  };
 
   return (
     <header className="sticky top-0 z-30 h-13 md:h-16 border-b border-[#E3DDD1] dark:border-[#1E324D] bg-[#FBF9F5]/95 dark:bg-[#0B192C]/95 backdrop-blur-md">
@@ -40,15 +74,15 @@ export function TopBar({
             Newsie
           </button>
 
-          {isPrivateActive && activeWorkspace && (
+          {isPrivateActive && (onOpenDashboard || onTriggerPrivateAccess) && (
             <button
               type="button"
-              onClick={() => onSelectTab('settings')}
-              title="Active private workspace — manage in Settings"
+              onClick={onOpenDashboard ?? onTriggerPrivateAccess}
+              aria-label="Open private workspace dashboard"
               className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-[#B0893E]/50 bg-[#EFEAE0]/70 px-2.5 py-1 text-[11px] font-semibold text-[#0B192C] hover:border-[#B0893E] dark:border-[#B0893E]/40 dark:bg-[#10233D] dark:text-[#D4AF6A]"
             >
               <ShieldCheck className="h-3.5 w-3.5 text-[#B0893E]" aria-hidden="true" />
-              <span className="max-w-[120px] truncate">{activeWorkspace.displayName}</span>
+              <span>Workspaces</span>
             </button>
           )}
         </div>
@@ -63,7 +97,8 @@ export function TopBar({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => onSelectTab(item.id)}
+                onClick={() => handleNavClick(item.id)}
+                onKeyDown={(e) => handleNavKeyDown(e, item.id)}
                 aria-current={active ? 'page' : undefined}
                 className={`py-1.5 text-sm font-medium transition-colors duration-150 whitespace-nowrap shrink-0 border-b-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#B0893E] ${
                   active

@@ -15,7 +15,7 @@ interface SearchScreenProps {
   results: Article[];
   searchHistory: string[];
   searchHistoryEnabled: boolean;
-  onCommitSearch: (term: string) => void;
+  onSubmitSearch: (rawInput: string) => Promise<void>;
   onClearHistory: () => void;
   showImages: boolean;
   textSize: TextSizeOption;
@@ -34,18 +34,17 @@ export function SearchScreen({
   results,
   searchHistory,
   searchHistoryEnabled,
-  onCommitSearch,
+  onSubmitSearch,
   onClearHistory,
   showImages,
   textSize,
   onToggleBookmark,
   onOpenArticle,
 }: SearchScreenProps) {
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      onCommitSearch(query.trim());
-    }
+    if (!query.trim()) return;
+    await onSubmitSearch(query);
   };
 
   const trimmed = query.trim();
@@ -113,32 +112,42 @@ export function SearchScreen({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="relative">
-        <label htmlFor="newsie-search-input" className="sr-only">
-          Search headlines, publishers, and categories
-        </label>
-        <Search
-          className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5C6470] dark:text-[#9AA6B8]"
-          aria-hidden="true"
-        />
-        <input
-          id="newsie-search-input"
-          type="search"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search headlines, publishers, categories, or keywords..."
-          className="min-h-[48px] w-full rounded-xl border border-[#D8D0C0] bg-[#FFFFFF] pl-10 pr-11 text-sm text-[#0B192C] placeholder:text-[#737C8A] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5] dark:placeholder:text-[#8492A6]"
-        />
-        {query && (
-          <button
-            type="button"
-            onClick={() => onQueryChange('')}
-            aria-label="Clear search query"
-            className="absolute right-1.5 top-1/2 inline-flex min-h-[40px] min-w-[40px] -translate-y-1/2 items-center justify-center rounded-lg text-[#5C6470] hover:text-[#0B192C] dark:text-[#9AA6B8] dark:hover:text-[#FBF9F5]"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
+      <form onSubmit={(e) => void handleSubmit(e)} className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <label htmlFor="newsie-search-input" className="sr-only">
+            Search headlines, publishers, and categories
+          </label>
+          <Search
+            className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5C6470] dark:text-[#9AA6B8]"
+            aria-hidden="true"
+          />
+          <input
+            id="newsie-search-input"
+            type="search"
+            maxLength={1024}
+            autoComplete="off"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            placeholder="Search headlines, publishers, categories, or keywords..."
+            className="min-h-[48px] w-full rounded-xl border border-[#D8D0C0] bg-[#FFFFFF] pl-10 pr-11 text-sm text-[#0B192C] placeholder:text-[#737C8A] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5] dark:placeholder:text-[#8492A6]"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => onQueryChange('')}
+              aria-label="Clear search query"
+              className="absolute right-1.5 top-1/2 inline-flex min-h-[40px] min-w-[40px] -translate-y-1/2 items-center justify-center rounded-lg text-[#5C6470] hover:text-[#0B192C] dark:text-[#9AA6B8] dark:hover:text-[#FBF9F5]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <button
+          type="submit"
+          className="min-h-[48px] rounded-xl bg-[#0B192C] px-5 text-xs font-semibold text-[#FBF9F5] transition-colors hover:bg-[#162B47] dark:bg-[#B0893E] dark:text-[#0B192C] dark:hover:bg-[#C7A154] whitespace-nowrap shrink-0"
+        >
+          Search
+        </button>
       </form>
 
       {!trimmed && searchHistoryEnabled && searchHistory.length > 0 && (

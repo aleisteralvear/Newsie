@@ -6,6 +6,7 @@ import {
   Category,
   NavTab,
   NewsSource,
+  PrivateAccessStatus,
   RefreshState,
   SortOrder,
   WorkspaceAuthMethod,
@@ -13,6 +14,8 @@ import {
 } from './core/common/types';
 import {
   apiClient,
+  hasPrivateDashboardToken,
+  setUnauthorizedDashboardHandler,
   setUnauthorizedWorkspaceHandler,
 } from './core/network/apiClient';
 import {
@@ -43,6 +46,8 @@ import { HomeScreen, SavedFeedConfigItem } from './ui/home/HomeScreen';
 import { SearchScope, SearchScreen } from './ui/search/SearchScreen';
 import { SettingsScreen } from './ui/settings/SettingsScreen';
 import { DirectoryEntry, SourcesScreen } from './ui/sources/SourcesScreen';
+import { PrivateAuthModal } from './ui/workspace/PrivateAuthModal';
+import { PrivateDashboard } from './ui/workspace/PrivateDashboard';
 
 const DEFAULT_WORKSPACES: WorkspaceSummary[] = [
   {
@@ -52,14 +57,28 @@ const DEFAULT_WORKSPACES: WorkspaceSummary[] = [
     isLocked: false,
     authMethod: 'none',
     autoLockMinutes: 0,
+    lastActivityAt: null,
     createdAt: new Date(0).toISOString(),
+    hasBiometricCredential: false,
   },
 ];
+
+const DEFAULT_ACCESS_STATUS: PrivateAccessStatus = {
+  hasSearchPassphrase: false,
+  doubleTapIntervalMs: 350,
+  hasPrivateWorkspaces: false,
+  hasAnyBiometricCredentials: false,
+};
 
 export default function App() {
   const [workspaces, setWorkspaces] =
     useState<WorkspaceSummary[]>(DEFAULT_WORKSPACES);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('default');
+  const [accessStatus, setAccessStatus] =
+    useState<PrivateAccessStatus>(DEFAULT_ACCESS_STATUS);
+
+  const [isPrivateAuthModalOpen, setIsPrivateAuthModalOpen] = useState(false);
+  const [isPrivateDashboardOpen, setIsPrivateDashboardOpen] = useState(false);
   const [workspaceModalMode, setWorkspaceModalMode] = useState<
     'create' | 'unlock' | null
   >(null);
@@ -112,6 +131,7 @@ export default function App() {
 
   const refreshLockRef = useRef(false);
   const lastActivityRef = useRef(Date.now());
+  const searchTimerRef = useRef<number | null>(null);
 
   const activeWorkspace = useMemo(
     () =>
@@ -126,6 +146,7 @@ export default function App() {
     setTotalArticles(0);
     setHasMore(false);
     setSources([]);
+    setCategories(DEFAULT_CATEGORIES);
     setBookmarkedArticles([]);
     setReadingHistory([]);
     setSearchResults([]);
@@ -133,7 +154,31 @@ export default function App() {
     setSavedConfigs([]);
     setSelectedArticleId(null);
     setSearchQuery('');
+    setSelectedCategoryId(ALL_NEWS_CATEGORY_ID);
+    setSearchSelectedSourceIds([]);
   }, []);
+
+  const refreshPrivateAccessStatus = useCallback(async () => {
+    try {
+      const status = await apiClient.getPrivateAccessStatus();
+      setAccessStatus(status);
+      return status;
+    } catch {
+      return accessStatus;
+    }
+  }, [accessStatus]);
+
+  useEffect(() => {
+    void apiClient
+      .getPrivateAccessStatus()
+      .then(setAccessStatus)
+      .catch(() => undefined);
+  }, []);
+
+  // Ensure document.title never reveals private workspace titles
+  useEffect(() => {
+    document.title = 'Newsie';
+  }, [activeWorkspaceId, isPrivateDashboardOpen]);
 
   useEffect(() => {
     applyThemeToDocument(preferences.theme);
@@ -175,7 +220,7 @@ export default function App() {
   const hydrateWorkspace = useCallback(
     async (workspaceId: string) => {
       try {
-        const wsListRes = await apiClient.listWorkspaces();
+        const wsListRes = await apiClient.listWorkspaces(workspaceId);
         setWorkspaces(wsListRes.workspaces);
 
         const targetWs = wsListRes.workspaces.find((w) => w.id === workspaceId);
@@ -224,7 +269,7 @@ export default function App() {
         );
         setSelectedCategoryId(ALL_NEWS_CATEGORY_ID);
       } catch {
-        // Initial fallback remains clean if unauthorized or transiently unavailable
+        // Fallback keeps screen safe if session expired mid-hydration
       }
     },
     [clearVolatileWorkspaceViewState, loadFeedPage],
@@ -234,7 +279,7 @@ export default function App() {
     void hydrateWorkspace(activeWorkspaceId);
   }, [activeWorkspaceId, hydrateWorkspace]);
 
-  // Handle server-enforced session expiration or auto-lock cleanly
+  // Handle server-enforced session expiration or dashboard expiration cleanly
   useEffect(() => {
     setUnauthorizedWorkspaceHandler((failedWorkspaceId) => {
       setWorkspaces((prev) =>
@@ -249,8 +294,53 @@ export default function App() {
         setWorkspaceModalMode('unlock');
       }
     });
-    return () => setUnauthorizedWorkspaceHandler(null);
+    setUnauthorizedDashboardHandler(() => {
+      setIsPrivateDashboardOpen(false);
+    });
+    return () => {
+      setUnauthorizedWorkspaceHandler(null);
+      setUnauthorizedDashboardHandler(null);
+    };
   }, [activeWorkspaceId, clearVolatileWorkspaceViewState, workspaces]);
+
+  const triggerPrivateAccess = useCallback(
+    async (allowCachedDashboard: boolean = false) => {
+      const status = await refreshPrivateAccessStatus();
+      if (
+        allowCachedDashboard &&
+        hasPrivateDashboardToken() &&
+        status.hasPrivateWorkspaces
+      ) {
+        const wsRes = await apiClient.listWorkspaces(activeWorkspaceId);
+        setWorkspaces(wsRes.workspaces);
+        setIsPrivateDashboardOpen(true);
+        return;
+      }
+      setIsPrivateAuthModalOpen(true);
+    },
+    [activeWorkspaceId, refreshPrivateAccessStatus],
+  );
+
+  // Global keyboard shortcut: Alt + Shift + P opens Private Access Verification
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        void triggerPrivateAccess();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [triggerPrivateAccess]);
+
+  // Lock private sessions cleanly when tab/browser closes
+  useEffect(() => {
+    const onPageHide = () => {
+      apiClient.lockAllKeepalive();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, []);
 
   const handleLockWorkspace = useCallback(
     async (workspaceId: string) => {
@@ -267,6 +357,17 @@ export default function App() {
     },
     [activeWorkspaceId, clearVolatileWorkspaceViewState],
   );
+
+  const handleLockAllAndExit = useCallback(async () => {
+    apiClient.lockAllKeepalive();
+    setIsPrivateDashboardOpen(false);
+    setIsPrivacyBlurred(false);
+    clearVolatileWorkspaceViewState();
+    setWorkspaces(DEFAULT_WORKSPACES);
+    setActiveWorkspaceId('default');
+    setActiveTab('home');
+    await hydrateWorkspace('default');
+  }, [clearVolatileWorkspaceViewState, hydrateWorkspace]);
 
   // Client-side inactivity auto-lock for active private workspaces
   useEffect(() => {
@@ -297,30 +398,49 @@ export default function App() {
     };
   }, [activeWorkspace, handleLockWorkspace]);
 
-  // App-switcher / tab visibility privacy blur when inside a private workspace
+  // Privacy blur overlay when tab hidden inside private workspace or Private Dashboard
   useEffect(() => {
     const onVisibility = () => {
-      if (
-        document.hidden &&
-        activeWorkspace?.isPrivate &&
-        !activeWorkspace.isLocked &&
-        preferences.privacyScreenEnabled
-      ) {
+      const inProtectedView =
+        (activeWorkspace?.isPrivate && !activeWorkspace.isLocked) ||
+        isPrivateDashboardOpen;
+      if (document.hidden && inProtectedView && preferences.privacyScreenEnabled) {
         setIsPrivacyBlurred(true);
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [activeWorkspace, preferences.privacyScreenEnabled]);
+  }, [activeWorkspace, isPrivateDashboardOpen, preferences.privacyScreenEnabled]);
 
+  // Live search that NEVER transmits a matching Method A access phrase to /api/search
   useEffect(() => {
+    if (searchTimerRef.current !== null) {
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+
     const trimmed = searchQuery.trim();
     if (!trimmed) {
       setSearchResults([]);
       return;
     }
-    const timer = window.setTimeout(async () => {
+
+    const normalized = searchQuery.normalize('NFC');
+    const isPhraseCandidate =
+      accessStatus.hasSearchPassphrase && Array.from(normalized).length >= 8;
+    const delayMs = isPhraseCandidate ? 320 : 140;
+
+    searchTimerRef.current = window.setTimeout(async () => {
       try {
+        if (isPhraseCandidate) {
+          const check = await apiClient.checkSearchPassphrase(normalized);
+          if (check.matched) {
+            setSearchQuery('');
+            setSearchResults([]);
+            void triggerPrivateAccess();
+            return;
+          }
+        }
         const res = await apiClient.searchArticles(
           activeWorkspaceId,
           trimmed,
@@ -329,11 +449,60 @@ export default function App() {
         );
         setSearchResults(res.items);
       } catch {
-        // Ignore transient search error
+        // Non-fatal search check error
       }
-    }, 140);
-    return () => window.clearTimeout(timer);
-  }, [activeWorkspaceId, searchQuery, searchScope, searchSelectedSourceIds]);
+    }, delayMs);
+
+    return () => {
+      if (searchTimerRef.current !== null) {
+        window.clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = null;
+      }
+    };
+  }, [
+    accessStatus.hasSearchPassphrase,
+    activeWorkspaceId,
+    searchQuery,
+    searchScope,
+    searchSelectedSourceIds,
+    triggerPrivateAccess,
+  ]);
+
+  // Method A interception BEFORE search history or /api/search on explicit submit
+  const handleSubmitSearch = async (rawInput: string) => {
+    if (searchTimerRef.current !== null) {
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+
+    const normalized = rawInput.normalize('NFC');
+    if (
+      accessStatus.hasSearchPassphrase &&
+      Array.from(normalized).length >= 8
+    ) {
+      const check = await apiClient.checkSearchPassphrase(normalized);
+      if (check.matched) {
+        setSearchQuery('');
+        setSearchResults([]);
+        await triggerPrivateAccess();
+        return;
+      }
+    }
+
+    const trimmed = normalized.trim();
+    if (!trimmed) return;
+    if (preferences.searchHistoryEnabled) {
+      const res = await apiClient.addSearchHistory(activeWorkspaceId, trimmed);
+      setSearchHistory(res.history);
+    }
+    const res = await apiClient.searchArticles(
+      activeWorkspaceId,
+      trimmed,
+      searchScope,
+      searchSelectedSourceIds,
+    );
+    setSearchResults(res.items);
+  };
 
   const handleRefresh = useCallback(async () => {
     if (!canStartRefresh(refreshLockRef.current)) return;
@@ -390,7 +559,6 @@ export default function App() {
     selectedCategoryId,
   ]);
 
-  // Background refresh interval scheduler
   useEffect(() => {
     if (preferences.refreshIntervalMinutes <= 0) return;
     const ms = preferences.refreshIntervalMinutes * 60 * 1000;
@@ -536,12 +704,6 @@ export default function App() {
     return res.importedCount;
   };
 
-  const handleCommitSearch = async (term: string) => {
-    if (!preferences.searchHistoryEnabled) return;
-    const res = await apiClient.addSearchHistory(activeWorkspaceId, term);
-    setSearchHistory(res.history);
-  };
-
   const handleClearSearchHistory = async () => {
     await apiClient.clearSearchHistory(activeWorkspaceId);
     setSearchHistory([]);
@@ -570,17 +732,23 @@ export default function App() {
   }) => {
     const res = await apiClient.createWorkspace(payload);
     setWorkspaces(res.workspaces);
-    setActiveWorkspaceId(res.workspace.id);
-    setActiveTab('home');
+    if (!isPrivateDashboardOpen) {
+      clearVolatileWorkspaceViewState();
+      setActiveWorkspaceId(res.workspace.id);
+      setActiveTab('home');
+    }
+    await refreshPrivateAccessStatus();
   };
 
   const handleUnlockWorkspace = async (
     workspaceId: string,
-    passphrase: string,
+    payload: { passphrase?: string; challengeId?: string; assertion?: unknown },
   ) => {
-    const res = await apiClient.unlockWorkspace(workspaceId, passphrase);
+    const res = await apiClient.unlockWorkspace(workspaceId, payload);
+    clearVolatileWorkspaceViewState();
     setWorkspaces(res.workspaces);
     setIsPrivacyBlurred(false);
+    setIsPrivateDashboardOpen(false);
     if (activeWorkspaceId === workspaceId) {
       await hydrateWorkspace(workspaceId);
     } else {
@@ -589,7 +757,7 @@ export default function App() {
     setActiveTab('home');
   };
 
-  const handleSelectWorkspace = (workspaceId: string) => {
+  const handleOpenWorkspaceFromDashboard = (workspaceId: string) => {
     const target = workspaces.find((w) => w.id === workspaceId);
     if (!target) return;
     if (target.isPrivate && target.isLocked) {
@@ -597,33 +765,11 @@ export default function App() {
       setWorkspaceModalMode('unlock');
       return;
     }
+    clearVolatileWorkspaceViewState();
     setIsPrivacyBlurred(false);
+    setIsPrivateDashboardOpen(false);
     setActiveWorkspaceId(workspaceId);
     setActiveTab('home');
-  };
-
-  const handleRenameWorkspace = async (workspaceId: string, name: string) => {
-    const res = await apiClient.renameWorkspace(workspaceId, name);
-    setWorkspaces(res.workspaces);
-  };
-
-  const handleUpdateWorkspaceAutoLock = async (
-    workspaceId: string,
-    autoLockMinutes: number,
-  ) => {
-    const res = await apiClient.updateWorkspaceSettings(workspaceId, {
-      autoLockMinutes,
-    });
-    setWorkspaces(res.workspaces);
-  };
-
-  const handleDeleteWorkspace = async (workspaceId: string) => {
-    const res = await apiClient.deleteWorkspace(workspaceId);
-    setWorkspaces(res.workspaces);
-    if (activeWorkspaceId === workspaceId) {
-      clearVolatileWorkspaceViewState();
-      setActiveWorkspaceId('default');
-    }
   };
 
   const selectedArticle = useMemo(
@@ -639,14 +785,22 @@ export default function App() {
     activeWorkspace?.isPrivate && activeWorkspace.isLocked,
   );
 
+  const handleSelectNavTab = (tab: NavTab) => {
+    setIsPrivateDashboardOpen(false);
+    setActiveTab(tab);
+  };
+
   return (
     <div className="min-h-screen bg-[#FBF9F5] text-[#111C2D] dark:bg-[#0B192C] dark:text-[#F3EFE6]">
       <TopBar
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleSelectNavTab}
         onRefresh={handleRefresh}
         isRefreshing={refreshState.isRefreshing}
         activeWorkspace={activeWorkspace}
+        doubleTapIntervalMs={accessStatus.doubleTapIntervalMs}
+        onTriggerPrivateAccess={() => void triggerPrivateAccess(false)}
+        onOpenDashboard={() => void triggerPrivateAccess(true)}
         onLockWorkspace={() => {
           if (activeWorkspace?.isPrivate) {
             void handleLockWorkspace(activeWorkspace.id);
@@ -654,7 +808,43 @@ export default function App() {
         }}
       />
 
-      {isCurrentWorkspaceLocked && activeWorkspace ? (
+      {isPrivateDashboardOpen ? (
+        <main
+          className={`mx-auto max-w-6xl px-4 pb-24 pt-6 transition duration-150 md:px-8 md:pb-14 md:pt-8 ${
+            isPrivacyBlurred ? 'blur-md select-none pointer-events-none' : ''
+          }`}
+        >
+          <PrivateDashboard
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            accessStatus={accessStatus}
+            onRefreshDashboardData={async () => {
+              const wsRes = await apiClient.listWorkspaces(activeWorkspaceId);
+              setWorkspaces(wsRes.workspaces);
+              const stillExists = wsRes.workspaces.some(
+                (w) => w.id === activeWorkspaceId,
+              );
+              if (!stillExists) {
+                clearVolatileWorkspaceViewState();
+                setActiveWorkspaceId('default');
+              }
+              await refreshPrivateAccessStatus();
+            }}
+            onOpenCreateWorkspace={() => {
+              setUnlockTargetWorkspace(null);
+              setWorkspaceModalMode('create');
+            }}
+            onOpenWorkspace={handleOpenWorkspaceFromDashboard}
+            onLockWorkspace={handleLockWorkspace}
+            onLockAllAndExit={handleLockAllAndExit}
+            onExitDashboard={() => {
+              setIsPrivateDashboardOpen(false);
+              setActiveTab('home');
+            }}
+            onUpdateAccessStatus={setAccessStatus}
+          />
+        </main>
+      ) : isCurrentWorkspaceLocked && activeWorkspace ? (
         <main className="mx-auto flex max-w-lg flex-col items-center justify-center px-4 py-24 text-center">
           <div className="w-full space-y-5 rounded-2xl border border-[#E3DDD1] bg-[#FFFFFF] p-8 shadow-sm dark:border-[#1E324D] dark:bg-[#10233D]">
             <Lock
@@ -663,11 +853,11 @@ export default function App() {
             />
             <div className="space-y-2">
               <h1 className="font-serif text-2xl font-semibold text-[#0B192C] dark:text-[#FBF9F5]">
-                {activeWorkspace.displayName} is Locked
+                Workspace Locked
               </h1>
               <p className="text-sm text-[#5C6470] dark:text-[#9AA6B8]">
-                Encrypted workspace data has been sealed with AES-256-GCM and
-                cleared from active memory.
+                Encrypted workspace records have been sealed with AES-256-GCM
+                and cleared from active memory.
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-3 pt-2">
@@ -684,6 +874,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  clearVolatileWorkspaceViewState();
                   setActiveWorkspaceId('default');
                   setActiveTab('home');
                 }}
@@ -772,7 +963,7 @@ export default function App() {
               results={searchResults}
               searchHistory={searchHistory}
               searchHistoryEnabled={preferences.searchHistoryEnabled}
-              onCommitSearch={handleCommitSearch}
+              onSubmitSearch={handleSubmitSearch}
               onClearHistory={handleClearSearchHistory}
               showImages={preferences.showImages}
               textSize={preferences.textSize}
@@ -817,62 +1008,58 @@ export default function App() {
               preferences={preferences}
               onUpdatePreferences={handleUpdatePreferences}
               onClearSearchHistory={handleClearSearchHistory}
-              workspaces={workspaces}
-              activeWorkspaceId={activeWorkspaceId}
-              onOpenCreateWorkspace={() => {
-                setUnlockTargetWorkspace(null);
-                setWorkspaceModalMode('create');
-              }}
-              onSelectWorkspace={handleSelectWorkspace}
-              onLockWorkspace={handleLockWorkspace}
-              onRenameWorkspace={handleRenameWorkspace}
-              onUpdateWorkspaceAutoLock={handleUpdateWorkspaceAutoLock}
-              onDeleteWorkspace={handleDeleteWorkspace}
             />
           )}
         </main>
       )}
 
-      {isPrivacyBlurred && activeWorkspace?.isPrivate && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Privacy screen protection"
-          className="fixed inset-0 z-40 flex items-center justify-center bg-[#0B192C]/80 p-6 backdrop-blur-md"
-        >
-          <div className="max-w-sm space-y-4 rounded-2xl border border-[#243B5C] bg-[#10233D] p-7 text-center text-[#FBF9F5] shadow-2xl">
-            <ShieldAlert
-              className="mx-auto h-9 w-9 text-[#D4AF6A]"
-              aria-hidden="true"
-            />
-            <h2 className="font-serif text-xl font-semibold">
-              Private Workspace Shielded
-            </h2>
-            <p className="text-xs leading-relaxed text-[#B9C4D4]">
-              Content was blurred while Newsie was in the background. Resume
-              reading or lock the workspace.
-            </p>
-            <div className="flex justify-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => void handleLockWorkspace(activeWorkspace.id)}
-                className="min-h-[40px] rounded-lg border border-[#294366] px-4 text-xs font-semibold text-[#FBF9F5]"
-              >
-                Lock Workspace
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsPrivacyBlurred(false)}
-                className="min-h-[40px] rounded-lg bg-[#B0893E] px-4 text-xs font-semibold text-[#0B192C]"
-              >
-                Resume
-              </button>
+      {isPrivacyBlurred &&
+        ((activeWorkspace?.isPrivate && !activeWorkspace.isLocked) ||
+          isPrivateDashboardOpen) && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Privacy screen protection"
+            className="fixed inset-0 z-40 flex items-center justify-center bg-[#0B192C]/85 p-6 backdrop-blur-xl"
+          >
+            <div className="max-w-sm space-y-4 rounded-2xl border border-[#243B5C] bg-[#10233D] p-7 text-center text-[#FBF9F5] shadow-2xl">
+              <ShieldAlert
+                className="mx-auto h-9 w-9 text-[#D4AF6A]"
+                aria-hidden="true"
+              />
+              <h2 className="font-serif text-xl font-semibold">
+                Private Session Shielded
+              </h2>
+              <p className="text-xs leading-relaxed text-[#B9C4D4]">
+                Content was hidden when the tab moved to the background. Resume
+                or lock all active sessions.
+              </p>
+              <div className="flex justify-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => void handleLockAllAndExit()}
+                  className="min-h-[40px] rounded-lg border border-[#294366] px-4 text-xs font-semibold text-[#FBF9F5]"
+                >
+                  Lock &amp; Exit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivacyBlurred(false)}
+                  className="min-h-[40px] rounded-lg bg-[#B0893E] px-4 text-xs font-semibold text-[#0B192C]"
+                >
+                  Resume
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <BottomNav activeTab={activeTab} onSelectTab={setActiveTab} />
+      <BottomNav
+        activeTab={activeTab}
+        onSelectTab={handleSelectNavTab}
+        doubleTapIntervalMs={accessStatus.doubleTapIntervalMs}
+        onTriggerPrivateAccess={() => void triggerPrivateAccess()}
+      />
 
       <ArticlePreviewModal
         article={selectedArticle}
@@ -932,6 +1119,18 @@ export default function App() {
         }}
       />
 
+      <PrivateAuthModal
+        isOpen={isPrivateAuthModalOpen}
+        accessStatus={accessStatus}
+        onClose={() => setIsPrivateAuthModalOpen(false)}
+        onAuthenticated={async ({ workspaces: updatedList }) => {
+          setIsPrivateAuthModalOpen(false);
+          setWorkspaces(updatedList);
+          await refreshPrivateAccessStatus();
+          setIsPrivateDashboardOpen(true);
+        }}
+      />
+
       <WorkspaceModal
         mode={workspaceModalMode}
         targetWorkspace={unlockTargetWorkspace}
@@ -939,6 +1138,7 @@ export default function App() {
         onCreateWorkspace={handleCreateWorkspace}
         onUnlockWorkspace={handleUnlockWorkspace}
         onSwitchToDefault={() => {
+          clearVolatileWorkspaceViewState();
           setActiveWorkspaceId('default');
           setActiveTab('home');
         }}

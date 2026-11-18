@@ -1,9 +1,12 @@
+import { useRef } from 'react';
 import { Bookmark, Compass, Home, Search, Settings } from 'lucide-react';
 import { NavTab } from '../../core/common/types';
 
 interface BottomNavProps {
   activeTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
+  doubleTapIntervalMs?: number;
+  onTriggerPrivateAccess?: () => void;
 }
 
 const MOBILE_TABS: {
@@ -18,7 +21,30 @@ const MOBILE_TABS: {
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export function BottomNav({ activeTab, onSelectTab }: BottomNavProps) {
+export function BottomNav({
+  activeTab,
+  onSelectTab,
+  doubleTapIntervalMs = 350,
+  onTriggerPrivateAccess,
+}: BottomNavProps) {
+  const lastSearchTapRef = useRef<number>(0);
+
+  const handleClick = (tabId: NavTab) => {
+    onSelectTab(tabId);
+    if (tabId !== 'search' || !onTriggerPrivateAccess) return;
+
+    const now = Date.now();
+    if (
+      lastSearchTapRef.current > 0 &&
+      now - lastSearchTapRef.current <= doubleTapIntervalMs
+    ) {
+      lastSearchTapRef.current = 0;
+      onTriggerPrivateAccess();
+      return;
+    }
+    lastSearchTapRef.current = now;
+  };
+
   return (
     <nav
       aria-label="Mobile navigation"
@@ -32,7 +58,19 @@ export function BottomNav({ activeTab, onSelectTab }: BottomNavProps) {
             <button
               key={tab.id}
               type="button"
-              onClick={() => onSelectTab(tab.id)}
+              onClick={() => handleClick(tab.id)}
+              onKeyDown={(e) => {
+                if (
+                  tab.id === 'search' &&
+                  e.shiftKey &&
+                  e.key === 'Enter' &&
+                  onTriggerPrivateAccess
+                ) {
+                  e.preventDefault();
+                  lastSearchTapRef.current = 0;
+                  onTriggerPrivateAccess();
+                }
+              }}
               aria-current={active ? 'page' : undefined}
               className={`flex min-h-[44px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[#B0893E] ${
                 active

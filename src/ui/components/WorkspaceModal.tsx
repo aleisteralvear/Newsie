@@ -12,7 +12,12 @@ import {
   WorkspaceAuthMethod,
   WorkspaceSummary,
 } from '../../core/common/types';
-import { ApiError } from '../../core/network/apiClient';
+import {
+  ApiError,
+  apiClient,
+  isPlatformBiometricAvailable,
+  runBrowserWebAuthnAssertion,
+} from '../../core/network/apiClient';
 
 interface WorkspaceModalProps {
   mode: 'create' | 'unlock' | null;
@@ -24,7 +29,10 @@ interface WorkspaceModalProps {
     authMethod: Exclude<WorkspaceAuthMethod, 'none'>;
     autoLockMinutes: number;
   }) => Promise<void>;
-  onUnlockWorkspace: (workspaceId: string, passphrase: string) => Promise<void>;
+  onUnlockWorkspace: (
+    workspaceId: string,
+    payload: { passphrase?: string; challengeId?: string; assertion?: unknown },
+  ) => Promise<void>;
   onSwitchToDefault?: () => void;
 }
 
@@ -40,34 +48,28 @@ export function WorkspaceModal({
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [showPass, setShowPass] = useState(false);
-  const [authMethod, setAuthMethod] =
-    useState<Exclude<WorkspaceAuthMethod, 'none'>>('passphrase');
   const [autoLockMinutes, setAutoLockMinutes] = useState(5);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [biometricSupported, setBiometricSupported] = useState(false);
 
-  useEffect(() => {
-    if (!mode) return;
-    setDisplayName('');
+  const resetSensitiveFields = () => {
     setPassphrase('');
     setConfirmPassphrase('');
     setShowPass(false);
-    setAuthMethod('passphrase');
+  };
+
+  useEffect(() => {
+    if (!mode) return;
+    setDisplayName('');
+    resetSensitiveFields();
     setAutoLockMinutes(5);
     setErrorMsg(null);
     setCooldownSeconds(0);
     setSubmitting(false);
 
-    if (
-      typeof window !== 'undefined' &&
-      window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable
-    ) {
-      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-        .then((ok) => setBiometricSupported(Boolean(ok)))
-        .catch(() => setBiometricSupported(false));
-    }
+    void isPlatformBiometricAvailable().then(setBiometricSupported);
   }, [mode, targetWorkspace?.id]);
 
   useEffect(() => {
@@ -81,13 +83,21 @@ export function WorkspaceModal({
   useEffect(() => {
     if (!mode) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        resetSensitiveFields();
+        onClose();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, onClose]);
 
   if (!mode) return null;
+
+  const handleClose = () => {
+    resetSensitiveFields();
+    onClose();
+  };
 
   const handleSubmitCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,11 +107,16 @@ export function WorkspaceModal({
       setErrorMsg('Please enter a workspace name.');
       return;
     }
-    if (passphrase.length < 8) {
+    const normalized = passphrase.normalize('NFC');
+    if (Array.from(normalized).length < 8) {
       setErrorMsg('Passphrase must be at least 8 characters long.');
       return;
     }
-    if (passphrase !== confirmPassphrase) {
+    if (normalized.length > 1024) {
+      setErrorMsg('Passphrase must not exceed 1024 characters.');
+      return;
+    }
+    if (normalized !== confirmPassphrase.normalize('NFC')) {
       setErrorMsg('Passphrases do not match.');
       return;
     }
@@ -110,12 +125,11 @@ export function WorkspaceModal({
     try {
       await onCreateWorkspace({
         displayName: displayName.trim(),
-        passphrase,
-        authMethod,
+        passphrase: normalized,
+        authMethod: 'passphrase',
         autoLockMinutes,
       });
-      setPassphrase('');
-      setConfirmPassphrase('');
+      resetSensitiveFields();
       onClose();
     } catch (err) {
       setErrorMsg((err as Error).message || 'Unable to create workspace.');
@@ -124,7 +138,7 @@ export function WorkspaceModal({
     }
   };
 
-  const handleSubmitUnlock = async (e: React.FormEvent) => {
+  const handleSubmitUnlockPassphrase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!targetWorkspace || cooldownSeconds > 0) return;
     setErrorMsg(null);
@@ -136,18 +150,84 @@ export function WorkspaceModal({
 
     setSubmitting(true);
     try {
-      await onUnlockWorkspace(targetWorkspace.id, passphrase);
-      setPassphrase('');
+      let webauthnProof:
+        | { challengeId: string; assertion: unknown }
+        | undefined;
+
+      if (
+        targetWorkspace.authMethod === 'both' &&
+        targetWorkspace.hasBiometricCredential
+      ) {
+        if (!biometricSupported) {
+          throw new Error(
+            'This workspace requires platform biometric verification, which is unavailable on this browser.',
+          );
+        }
+        const opts = await apiClient.getWebAuthnAuthOptions(
+          'auth',
+          targetWorkspace.id,
+        );
+        if (opts.allowCredentialIds.length === 0) {
+          throw new Error('No registered passkey found for this workspace.');
+        }
+        const assertion = await runBrowserWebAuthnAssertion(opts);
+        webauthnProof = { challengeId: opts.challengeId, assertion };
+      }
+
+      await onUnlockWorkspace(targetWorkspace.id, {
+        passphrase,
+        ...(webauthnProof ?? {}),
+      });
+      resetSensitiveFields();
+      onClose();
+    } catch (err) {
+      resetSensitiveFields();
+      if (err instanceof ApiError && err.retryAfterSeconds) {
+        setCooldownSeconds(err.retryAfterSeconds);
+      }
+      setErrorMsg((err as Error).message || 'Authentication failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBiometricUnlock = async () => {
+    if (!targetWorkspace || cooldownSeconds > 0) return;
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      const opts = await apiClient.getWebAuthnAuthOptions(
+        'auth',
+        targetWorkspace.id,
+      );
+      if (opts.allowCredentialIds.length === 0) {
+        throw new Error('No biometric passkey is registered for this workspace.');
+      }
+      const assertion = await runBrowserWebAuthnAssertion(opts);
+      await onUnlockWorkspace(targetWorkspace.id, {
+        challengeId: opts.challengeId,
+        assertion,
+      });
+      resetSensitiveFields();
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.retryAfterSeconds) {
         setCooldownSeconds(err.retryAfterSeconds);
       }
-      setErrorMsg((err as Error).message || 'Incorrect passphrase.');
+      setErrorMsg(
+        (err as Error).message || 'Biometric authentication failed.',
+      );
     } finally {
       setSubmitting(false);
     }
   };
+
+  const canUseBiometricUnlock = Boolean(
+    targetWorkspace &&
+      targetWorkspace.authMethod === 'biometric' &&
+      targetWorkspace.hasBiometricCredential &&
+      biometricSupported,
+  );
 
   return (
     <div
@@ -155,7 +235,7 @@ export function WorkspaceModal({
       aria-modal="true"
       aria-labelledby="workspace-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B192C]/70 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#E3DDD1] bg-[#FBF9F5] p-6 shadow-2xl dark:border-[#1E324D] dark:bg-[#0B192C]"
@@ -179,7 +259,7 @@ export function WorkspaceModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             aria-label="Close workspace dialog"
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-[#5C6470] hover:bg-[#EFEAE0] dark:text-[#9AA6B8] dark:hover:bg-[#132844]"
           >
@@ -199,10 +279,9 @@ export function WorkspaceModal({
                   <strong className="font-semibold">
                     No passphrase recovery:
                   </strong>{' '}
-                  Private workspace subscriptions, bookmarks, and history are
-                  encrypted with AES-256-GCM using a key derived from your
-                  passphrase (Argon2id). Forgotten passphrases cannot be reset or
-                  recovered.
+                  Subscriptions, articles, bookmarks, and history inside a private
+                  workspace stay continuously encrypted with AES-256-GCM. You can
+                  enroll a WebAuthn platform passkey after creation.
                 </p>
               </div>
             </div>
@@ -231,7 +310,7 @@ export function WorkspaceModal({
                 htmlFor="ws-passphrase"
                 className="mb-1.5 block text-xs font-semibold text-[#0B192C] dark:text-[#E5E9F0]"
               >
-                Passphrase (min 8 characters · Unicode, spaces &amp; emoji supported)
+                Passphrase (8–1024 chars · Unicode, spaces &amp; emoji supported)
               </label>
               <div className="relative flex items-center">
                 <input
@@ -239,10 +318,11 @@ export function WorkspaceModal({
                   type={showPass ? 'text' : 'password'}
                   required
                   minLength={8}
+                  maxLength={1024}
                   autoComplete="new-password"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Enter a memorable passphrase"
+                  placeholder="Enter a strong passphrase"
                   className="min-h-[44px] w-full rounded-lg border border-[#D8D0C0] bg-[#FFFFFF] pl-3 pr-11 text-sm text-[#0B192C] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5]"
                 />
                 <button
@@ -272,6 +352,7 @@ export function WorkspaceModal({
                 type={showPass ? 'text' : 'password'}
                 required
                 minLength={8}
+                maxLength={1024}
                 autoComplete="new-password"
                 value={confirmPassphrase}
                 onChange={(e) => setConfirmPassphrase(e.target.value)}
@@ -280,62 +361,26 @@ export function WorkspaceModal({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label
-                  htmlFor="ws-auth-method"
-                  className="mb-1.5 block text-xs font-semibold text-[#0B192C] dark:text-[#E5E9F0]"
-                >
-                  Unlock Policy
-                </label>
-                <select
-                  id="ws-auth-method"
-                  value={authMethod}
-                  onChange={(e) =>
-                    setAuthMethod(
-                      e.target.value as Exclude<WorkspaceAuthMethod, 'none'>,
-                    )
-                  }
-                  className="min-h-[44px] w-full rounded-lg border border-[#D8D0C0] bg-[#FFFFFF] px-3 text-xs font-semibold text-[#0B192C] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5]"
-                >
-                  <option value="passphrase">Passphrase (Argon2id)</option>
-                  {biometricSupported && (
-                    <option value="both">Biometric + Passphrase</option>
-                  )}
-                </select>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="ws-auto-lock"
-                  className="mb-1.5 block text-xs font-semibold text-[#0B192C] dark:text-[#E5E9F0]"
-                >
-                  Inactivity Auto-Lock
-                </label>
-                <select
-                  id="ws-auto-lock"
-                  value={autoLockMinutes}
-                  onChange={(e) => setAutoLockMinutes(Number(e.target.value))}
-                  className="min-h-[44px] w-full rounded-lg border border-[#D8D0C0] bg-[#FFFFFF] px-3 text-xs font-semibold text-[#0B192C] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5]"
-                >
-                  <option value={1}>After 1 minute</option>
-                  <option value={5}>After 5 minutes</option>
-                  <option value={15}>After 15 minutes</option>
-                  <option value={30}>After 30 minutes</option>
-                  <option value={0}>Manual lock only</option>
-                </select>
-              </div>
+            <div>
+              <label
+                htmlFor="ws-auto-lock"
+                className="mb-1.5 block text-xs font-semibold text-[#0B192C] dark:text-[#E5E9F0]"
+              >
+                Inactivity Auto-Lock
+              </label>
+              <select
+                id="ws-auto-lock"
+                value={autoLockMinutes}
+                onChange={(e) => setAutoLockMinutes(Number(e.target.value))}
+                className="min-h-[44px] w-full rounded-lg border border-[#D8D0C0] bg-[#FFFFFF] px-3 text-xs font-semibold text-[#0B192C] focus:border-[#B0893E] focus:outline-none dark:border-[#243B5C] dark:bg-[#10233D] dark:text-[#FBF9F5]"
+              >
+                <option value={1}>After 1 minute</option>
+                <option value={5}>After 5 minutes</option>
+                <option value={15}>After 15 minutes</option>
+                <option value={30}>After 30 minutes</option>
+                <option value={0}>Manual lock only</option>
+              </select>
             </div>
-
-            {!biometricSupported && (
-              <p className="flex items-center gap-1.5 text-[11px] text-[#5C6470] dark:text-[#9AA6B8]">
-                <Fingerprint className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  OS platform biometrics are optional and remain under operating
-                  system control where hardware WebAuthn is available.
-                </span>
-              </p>
-            )}
 
             {errorMsg && (
               <p
@@ -349,7 +394,7 @@ export function WorkspaceModal({
             <div className="flex justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleClose}
                 className="min-h-[44px] rounded-lg border border-[#D8D0C0] px-4 py-2 text-xs font-semibold text-[#0B192C] hover:bg-[#EFEAE0] dark:border-[#294366] dark:text-[#FBF9F5] dark:hover:bg-[#172E4D]"
               >
                 Cancel
@@ -359,23 +404,38 @@ export function WorkspaceModal({
                 disabled={submitting}
                 className="min-h-[44px] rounded-lg bg-[#0B192C] px-5 py-2 text-xs font-semibold text-[#FBF9F5] hover:bg-[#162B47] disabled:opacity-60 dark:bg-[#B0893E] dark:text-[#0B192C]"
               >
-                {submitting ? 'Provisioning Keys...' : 'Create Encrypted Workspace'}
+                {submitting ? 'Provisioning Keys...' : 'Create Private Workspace'}
               </button>
             </div>
           </form>
         ) : (
-          <form onSubmit={handleSubmitUnlock} className="space-y-4">
+          <form onSubmit={handleSubmitUnlockPassphrase} className="space-y-4">
             <p className="text-sm leading-relaxed text-[#4A5565] dark:text-[#B9C4D4]">
-              This workspace is sealed at rest. Enter its passphrase to unwrap the
-              AES-256-GCM encryption key in memory.
+              {targetWorkspace?.authMethod === 'both'
+                ? 'Passphrase and platform passkey verification are both required to open this workspace.'
+                : 'Workspace records remain AES-256-GCM encrypted at rest. Authenticate to open a memory session.'}
             </p>
+
+            {canUseBiometricUnlock && (
+              <button
+                type="button"
+                disabled={submitting || cooldownSeconds > 0}
+                onClick={() => void handleBiometricUnlock()}
+                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-[#B0893E] bg-[#EFEAE0]/60 px-4 py-2 text-xs font-semibold text-[#0B192C] hover:bg-[#EFEAE0] disabled:opacity-60 dark:bg-[#10233D] dark:text-[#D4AF6A] dark:hover:bg-[#172E4D]"
+              >
+                <Fingerprint className="h-4 w-4 text-[#B0893E]" aria-hidden="true" />
+                <span>Unlock with Biometric Passkey</span>
+              </button>
+            )}
 
             <div>
               <label
                 htmlFor="ws-unlock-passphrase"
                 className="mb-1.5 block text-xs font-semibold text-[#0B192C] dark:text-[#E5E9F0]"
               >
-                Workspace Passphrase
+                {targetWorkspace?.authMethod === 'biometric'
+                  ? 'Backup Passphrase'
+                  : 'Workspace Passphrase'}
               </label>
               <div className="relative flex items-center">
                 <input
@@ -420,7 +480,7 @@ export function WorkspaceModal({
                   type="button"
                   onClick={() => {
                     onSwitchToDefault();
-                    onClose();
+                    handleClose();
                   }}
                   className="min-h-[40px] text-xs font-semibold text-[#5C6470] underline-offset-4 hover:underline dark:text-[#9AA6B8]"
                 >
@@ -433,7 +493,7 @@ export function WorkspaceModal({
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleClose}
                   className="min-h-[44px] rounded-lg border border-[#D8D0C0] px-4 py-2 text-xs font-semibold text-[#0B192C] hover:bg-[#EFEAE0] dark:border-[#294366] dark:text-[#FBF9F5] dark:hover:bg-[#172E4D]"
                 >
                   Cancel
@@ -447,7 +507,10 @@ export function WorkspaceModal({
                     ? `Wait ${cooldownSeconds}s`
                     : submitting
                       ? 'Verifying...'
-                      : 'Unlock Workspace'}
+                      : targetWorkspace?.authMethod === 'both' &&
+                          targetWorkspace?.hasBiometricCredential
+                        ? 'Verify Passphrase & Passkey'
+                        : 'Unlock Workspace'}
                 </button>
               </div>
             </div>

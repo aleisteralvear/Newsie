@@ -4,16 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const DEFAULT_WORKSPACE_ID = 'default';
 
-export function createDatabase(dbPath?: string): DatabaseSync {
-  const resolvedPath = dbPath ?? path.resolve(process.cwd(), 'data', 'newsie.db');
-  if (resolvedPath !== ':memory:') {
-    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-  }
-
-  const db = new DatabaseSync(resolvedPath);
-  db.exec('PRAGMA journal_mode = WAL;');
+export function applyNewsieSchema(db: DatabaseSync): void {
   db.exec('PRAGMA foreign_keys = ON;');
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
@@ -27,8 +19,49 @@ export function createDatabase(dbPath?: string): DatabaseSync {
       failed_attempts INTEGER NOT NULL DEFAULT 0,
       locked_until_ms INTEGER NOT NULL DEFAULT 0,
       auto_lock_minutes INTEGER NOT NULL DEFAULT 5,
+      last_activity_at TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS private_access_gate (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      phrase_hash TEXT,
+      phrase_salt TEXT,
+      double_tap_interval_ms INTEGER NOT NULL DEFAULT 350,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until_ms INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS webauthn_credentials (
+      credential_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      public_key_spki_b64 TEXT NOT NULL,
+      algorithm INTEGER NOT NULL,
+      sign_count INTEGER NOT NULL DEFAULT 0,
+      label TEXT NOT NULL DEFAULT 'Platform Biometric',
+      wrapped_dek TEXT,
+      wrapped_dek_iv TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webauthn_ws ON webauthn_credentials(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS encrypted_workspace_records (
+      workspace_id TEXT NOT NULL,
+      record_type TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      updated_at_iso TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, record_type, record_id),
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_enc_records_ws_type
+      ON encrypted_workspace_records(workspace_id, record_type);
 
     CREATE TABLE IF NOT EXISTS categories (
       id TEXT NOT NULL,
@@ -137,5 +170,29 @@ export function createDatabase(dbPath?: string): DatabaseSync {
     );
   `);
 
+  const cols = db
+    .prepare('PRAGMA table_info(workspaces)')
+    .all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'last_activity_at')) {
+    db.exec('ALTER TABLE workspaces ADD COLUMN last_activity_at TEXT;');
+  }
+
+  db.prepare(
+    `INSERT OR IGNORE INTO private_access_gate (id, double_tap_interval_ms, updated_at)
+     VALUES (1, 350, ?)`,
+  ).run(new Date().toISOString());
+}
+
+export function createDatabase(dbPath?: string): DatabaseSync {
+  const resolvedPath = dbPath ?? path.resolve(process.cwd(), 'data', 'newsie.db');
+  if (resolvedPath !== ':memory:') {
+    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  }
+
+  const db = new DatabaseSync(resolvedPath);
+  if (resolvedPath !== ':memory:') {
+    db.exec('PRAGMA journal_mode = WAL;');
+  }
+  applyNewsieSchema(db);
   return db;
 }

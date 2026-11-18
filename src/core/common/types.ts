@@ -81,5 +81,14 @@ export interface WorkspaceSummary {
   authMethod: WorkspaceAuthMethod;
   autoLockMinutes: number;
   createdAt: string;
+  lastActivityAt: string | null;
+  hasBiometricCredential: boolean;
+}
+
+export interface PrivateAccessStatus {
+  hasSearchPassphrase: boolean;
+  doubleTapIntervalMs: number;
+  hasPrivateWorkspaces: boolean;
+  hasAnyBiometricCredentials: boolean;
 }
 
