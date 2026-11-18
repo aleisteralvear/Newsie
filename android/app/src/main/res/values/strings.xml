@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Newsie</string>
+    <string name="notif_channel_breaking_name">Breaking Dispatches</string>
+    <string name="notif_channel_breaking_desc">High-priority breaking dispatch alerts from enabled news sources</string>
+    <string name="notif_channel_category_name">Subscribed Category Digests</string>
+    <string name="notif_channel_category_desc">Updates for newly indexed articles in your enabled categories</string>
+    <string name="private_notif_hidden_notice">Private workspace updates are never shown in system notifications.</string>
+</resources>

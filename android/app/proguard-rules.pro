@@ -1,0 +1,9 @@
+-keep class net.zetetic.database.** { *; }
+-keep class androidx.room.** { *; }
+-keep class com.aleisteralvear.newsie.workers.FeedSyncWorker { <init>(...); }
+-keep class org.bouncycastle.crypto.generators.Argon2BytesGenerator { *; }
+-keep class org.bouncycastle.crypto.params.Argon2Parameters* { *; }
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+-keepattributes Signature,InnerClasses,EnclosingMethod
