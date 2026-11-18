@@ -1,0 +1,600 @@
+NEWSIE: FULL NATIVE ANDROID IMPLEMENTATION
+ZERO-SHOT IMPLEMENTATION DIRECTIVE
+PART 2 OF 2: SECURITY, FEEDS, UI, TESTING, BUILD, AND DELIVERY
+
+CONTINUATION INSTRUCTION
+
+This is Part 2 of the Newsie native Android implementation directive.
+
+Use it together with Part 1. Part 1 defines the repository, architecture, core news features, and private workspace behavior. Part 2 defines the mandatory security design, native feed engine, visual requirements, testing, build process, and acceptance criteria.
+
+Do not restart the project or ignore Part 1. Continue the same implementation.
+
+6. NATIVE ENCRYPTION ARCHITECTURE
+
+This section is mandatory.
+
+Do not copy the existing server-side encryption implementation directly.
+
+The Android application must perform its security operations locally.
+
+There must be no requirement for a Node.js server to unlock a workspace.
+
+6.1 DATABASE ENCRYPTION
+
+Use SQLCipher for Android with Room.
+
+Encrypt the application database at rest.
+
+Generate a cryptographically secure random database key.
+
+Protect the database key with Android Keystore.
+
+Do not store the raw database key in:
+- SharedPreferences.
+- DataStore.
+- Plaintext files.
+- Source code.
+- Build configuration.
+- Logs.
+
+Do not include secrets in the APK.
+
+Configure database backups so that encrypted database files and key material are not copied in a way that breaks the security model.
+
+6.2 WORKSPACE ENCRYPTION
+
+Each private workspace must have its own random 256-bit Data Encryption Key.
+
+Use AES-256-GCM.
+
+Use a unique random 96-bit nonce for every encryption operation.
+
+Never reuse a nonce with the same key.
+
+Use authenticated additional data that binds ciphertext to:
+- Workspace ID.
+- Record type.
+- Record ID.
+- Schema or format version.
+
+Store private workspace content as encrypted records.
+
+Do not write private article titles, article descriptions, search terms, bookmarks, reading history, source names, or preferences as plaintext database records.
+
+Private content must remain encrypted at rest while the workspace is unlocked.
+
+Do not rely on locking the workspace to encrypt plaintext records.
+
+An unexpected process termination must not leave private content in plaintext database tables, WAL files, journal files, cache files, or temporary files.
+
+Use transactional writes.
+
+Verify authentication tags when reading records.
+
+Reject corrupted or modified ciphertext safely.
+
+Do not return partially decrypted data after an authentication failure.
+
+6.3 PASSPHRASE PROTECTION
+
+Use Argon2id for passphrase-based key derivation.
+
+Use a unique random salt for every workspace.
+
+Use an appropriate memory cost for modern Android devices. Start with 64 MiB and three iterations, then benchmark on a physical device.
+
+Document the final parameters.
+
+Derive separate cryptographic keys for separate purposes.
+
+Do not reuse one derived key for unrelated operations.
+
+Use constant-time comparison where a verifier comparison is necessary.
+
+Clear temporary byte arrays and key buffers as soon as practical.
+
+Never log passwords, passphrases, derived keys, ciphertext plaintext, or authentication tokens.
+
+6.4 BIOMETRIC KEY PROTECTION
+
+Use a separate Android Keystore key for biometric protection.
+
+Require user authentication for its use.
+
+Use the Android biometric prompt with a cryptographic object.
+
+Use the Keystore key to protect the workspace DEK.
+
+For biometric-only authentication, unlock the DEK only after successful biometric authentication.
+
+For combined authentication, require both successful passphrase verification and successful biometric authentication.
+
+Use StrongBox when available, but do not require it.
+
+If StrongBox is unavailable, use the normal Android Keystore implementation and document the security level.
+
+Handle key invalidation safely.
+
+Do not store exportable biometric secrets.
+
+6.5 LOCKING AND MEMORY
+
+Lock workspaces after the configured inactivity period.
+
+Support manual locking.
+
+Lock private workspaces when the application moves to the background, subject to a short configurable grace period if necessary.
+
+Lock on screen lock where practical.
+
+Clear private UI state when locking.
+
+Clear sensitive in-memory buffers where practical.
+
+Do not claim that garbage-collected Kotlin or Java strings can be securely erased.
+
+Do not claim protection against a rooted device, a compromised operating system, memory inspection, or a malicious application with equivalent privileges.
+
+Use FLAG_SECURE for private workspace screens.
+
+Prevent sensitive workspace content from appearing in screenshots, recent-app previews, notifications, or application switcher thumbnails.
+
+7. LOCAL RSS AND ATOM ENGINE
+
+The native app must retrieve feeds directly from the Android device.
+
+Do not require the Express server.
+
+Use OkHttp with:
+- Connection timeouts.
+- Read timeouts.
+- Request timeouts.
+- Response size limits.
+- Safe redirect handling.
+- Conditional requests using ETag.
+- Conditional requests using Last-Modified.
+- Clear error reporting.
+
+Support RSS and Atom.
+
+Use a secure XML parser.
+
+Disable external entities and DTD processing.
+
+Reject XML entity expansion attacks.
+
+Limit feed payload size to 2 MB unless a documented reason requires another limit.
+
+Validate URLs before fetching.
+
+Reject malformed URLs and unsupported schemes.
+
+Reject loopback, link-local, multicast, private-network, and cloud metadata addresses unless the user explicitly approves a supported local-network source.
+
+Revalidate redirect destinations.
+
+Do not allow a redirect to bypass URL validation.
+
+Avoid indefinite network requests.
+
+Handle unavailable feeds without crashing the application.
+
+Deduplicate articles.
+
+Preserve feed metadata and source update status.
+
+BACKGROUND REFRESH
+
+Use WorkManager.
+
+Respect the user's refresh interval.
+
+Respect Wi-Fi-only settings.
+
+Respect Android battery restrictions.
+
+Use network constraints.
+
+Avoid excessive background work.
+
+Manual refresh must work independently of scheduled refresh.
+
+A refresh must not block normal navigation.
+
+Private workspace feed refresh must use the correct workspace encryption context.
+
+Do not refresh a locked private workspace by exposing its DEK or private data.
+
+8. USER INTERFACE AND VISUAL DESIGN
+
+Use the existing Newsie design as the visual reference.
+
+Do not replace it with a generic dashboard template.
+
+Preserve the editorial character.
+
+The existing palette includes:
+- Deep navy: #0B192C
+- Warm paper: #FBF9F5
+- Antique gold: #B0893E
+- Muted gray: #5C6470
+- Light border: #E3DDD1
+
+Use a refined serif display style for the Newsie title and major editorial headings.
+
+Use a clean sans-serif font for normal interface text.
+
+Use restrained gold accents.
+
+Use a warm paper background in light mode.
+
+Use deep navy in dark mode.
+
+Create a native Material 3 design system that preserves this visual identity.
+
+LAYOUT
+
+Phone layout:
+- Compact top bar.
+- Bottom navigation.
+- Scrollable article feed.
+- Large touch targets.
+- Responsive article cards.
+- Pull-to-refresh.
+
+Tablet layout:
+- More horizontal space.
+- Navigation rail or expanded navigation.
+- Optional two-column editorial layout.
+- Do not simply stretch the phone interface.
+
+Use proper system insets.
+
+Support edge-to-edge layouts correctly.
+
+Support Android display scaling and accessibility font scaling.
+
+Provide accessible descriptions for icons and buttons.
+
+Maintain sufficient contrast.
+
+Use meaningful loading, empty, and error states.
+
+Do not use placeholder buttons that do nothing.
+
+Every visible control must perform its stated action.
+
+9. NAVIGATION
+
+Use native navigation.
+
+Required main destinations:
+1. Home.
+2. Search.
+3. Saved.
+4. Sources.
+5. Settings.
+
+The private workspace dashboard must not appear as a normal main destination.
+
+The private access triggers are:
+- Search phrase.
+- Double-tap Search.
+
+Normal navigation must continue to work.
+
+Handle Android Back correctly.
+
+Do not leave authentication dialogs or private workspace screens exposed after locking.
+
+10. DATA AND PRIVACY
+
+The application must work without a user account.
+
+Do not add mandatory cloud registration.
+
+Do not add telemetry or analytics by default.
+
+Do not transmit private workspace content to external services.
+
+Do not include private workspace information in crash reports.
+
+Do not store secrets in logs.
+
+Use Android backup rules that protect the encryption design.
+
+Provide a clear user-facing warning that forgetting a private workspace passphrase can result in permanent data loss.
+
+If an export feature is added for private data, require fresh authentication and encrypt the export.
+
+Never create an unencrypted private workspace export by default.
+
+11. TESTING REQUIREMENTS
+
+Create and run automated tests.
+
+Do not merely create test files and claim success.
+
+UNIT TESTS
+
+Test:
+- RSS parsing.
+- Atom parsing.
+- Invalid XML.
+- XXE rejection.
+- URL validation.
+- Article deduplication.
+- Search.
+- Pagination.
+- Category filtering.
+- Workspace isolation.
+- Bookmark persistence.
+- Reading history.
+- Preferences.
+- Passphrase normalization.
+- Argon2id key derivation.
+- AES-GCM encryption and decryption.
+- Authentication-tag failure.
+- Wrong passphrase rejection.
+- Nonce uniqueness.
+- Workspace locking.
+- Workspace deletion.
+- Key rotation.
+
+SECURITY TESTS
+
+These tests are release blockers:
+
+1. Create a private workspace.
+2. Store a unique plaintext test phrase in its article data.
+3. Lock the workspace.
+4. Inspect the database file and all associated database files.
+5. Verify that the plaintext phrase is not present.
+6. Repeat while the workspace is unlocked.
+7. Terminate the application unexpectedly.
+8. Restart the application.
+9. Verify that private records remain encrypted.
+10. Verify that the workspace requires authentication before it can be read.
+
+Also test:
+- Workspace A cannot read Workspace B.
+- Invalid biometric authentication does not unlock a workspace.
+- Missing or invalidated Keystore keys do not silently downgrade protection.
+- Modified ciphertext is rejected.
+- A locked workspace cannot be accessed through stale UI state.
+- A private access phrase is never inserted into search history.
+- A private access phrase is never sent in a network request.
+
+INSTRUMENTATION TESTS
+
+Test on an Android emulator or physical device where available.
+
+Test:
+- First launch.
+- Main navigation.
+- Search.
+- RSS refresh.
+- Source management.
+- Workspace creation.
+- Workspace unlocking.
+- Workspace locking.
+- Biometric enrollment.
+- Biometric authentication.
+- Automatic locking.
+- App backgrounding.
+- App restart.
+
+If biometric hardware is unavailable in the test environment, clearly identify which tests require a physical device.
+
+Do not mark an untested hardware feature as verified.
+
+12. BUILD AND APK REQUIREMENTS
+
+Create a complete Android Gradle project.
+
+Build the application.
+
+Run:
+./gradlew test
+./gradlew lint
+./gradlew assembleDebug
+
+Run instrumentation tests when an emulator or physical device is available.
+
+Fix compilation errors.
+
+Fix failing tests.
+
+Fix lint issues that affect correctness, security, or maintainability.
+
+Do not suppress warnings simply to make the build pass.
+
+The primary deliverable is:
+android/app/build/outputs/apk/debug/app-debug.apk
+
+The APK must be installable.
+
+Also provide the release build configuration.
+
+Do not claim that a release APK is production signed unless a real signing key has been configured.
+
+Never generate or commit a private signing key.
+
+If the environment does not have the Android SDK or cannot execute Gradle, state that clearly. Do not fabricate a successful build or an APK path.
+
+13. IMPLEMENTATION WORKFLOW
+
+Follow this order.
+
+PHASE 1: INSPECT
+
+Inspect the complete repository.
+
+Identify all existing features, data models, settings, feed sources, and security behavior.
+
+Produce a concise feature mapping between the existing React implementation and the native implementation.
+
+Identify dependencies that cannot be reused on Android.
+
+Do not stop after this phase.
+
+PHASE 2: ESTABLISH ANDROID PROJECT
+
+Create the independent /android project.
+
+Configure Gradle, Kotlin, Compose, Room, SQLCipher, Keystore, BiometricPrompt, WorkManager, and networking.
+
+Verify that a minimal Android build succeeds before implementing the complete application.
+
+PHASE 3: IMPLEMENT DATA AND SECURITY
+
+Implement the database.
+
+Implement the repository layer.
+
+Implement encryption.
+
+Implement workspace isolation.
+
+Implement biometric authentication.
+
+Implement passphrase authentication.
+
+Implement lock and timeout behavior.
+
+Test these systems before connecting them to the UI.
+
+PHASE 4: IMPLEMENT THE NEWS ENGINE
+
+Implement RSS and Atom parsing.
+
+Implement source management.
+
+Implement feed refresh.
+
+Implement article storage.
+
+Implement pagination.
+
+Implement search.
+
+Implement bookmarks and reading history.
+
+PHASE 5: IMPLEMENT UI
+
+Build all main screens.
+
+Build article cards.
+
+Build category controls.
+
+Build source management.
+
+Build settings.
+
+Build private authentication.
+
+Build the private workspace dashboard.
+
+Implement hidden entry methods.
+
+Connect all UI actions to real functionality.
+
+PHASE 6: TEST AND HARDEN
+
+Run unit tests.
+
+Run security tests.
+
+Run lint.
+
+Run the Android build.
+
+Resolve failures.
+
+Review the final implementation for data leaks, broken navigation, incomplete controls, and security downgrades.
+
+PHASE 7: DELIVER
+
+Produce the APK.
+
+Provide a concise implementation report.
+
+Include:
+- What was implemented.
+- Project architecture.
+- Important security decisions.
+- Test results.
+- Build results.
+- Known limitations.
+- Exact APK location.
+- Instructions to install the APK on an Android phone.
+
+14. STRICT IMPLEMENTATION RULES
+
+1. Do not build a WebView wrapper.
+2. Do not require the existing Express server.
+3. Do not use browser WebAuthn for native authentication.
+4. Do not use plaintext storage for private workspace records.
+5. Do not store encryption keys in ordinary preferences.
+6. Do not expose private workspace names before authentication.
+7. Do not let the private entry phrase become a normal search query.
+8. Do not create fake biometric functionality.
+9. Do not use hardcoded API keys.
+10. Do not remove existing Newsie features without documenting the reason.
+11. Do not replace real feed functionality with sample data.
+12. Do not leave buttons or settings as visual placeholders.
+13. Do not claim a test passed unless it was executed.
+14. Do not claim an APK exists unless the file was actually built.
+15. Do not stop at a plan or architecture document.
+
+If a dependency is incompatible, select a maintained compatible alternative and document the decision.
+
+If a feature cannot be implemented safely, explain the limitation and provide the safest functional alternative.
+
+If the build fails, continue debugging until it succeeds or until a real environment limitation prevents further progress.
+
+15. FINAL ACCEPTANCE CRITERIA
+
+Newsie is complete only when all of these conditions are met:
+
+- A native Android application exists.
+- The application builds as an APK.
+- The application launches without a server.
+- The news feed works.
+- RSS and Atom sources work.
+- Categories work.
+- Search works.
+- Pagination works.
+- Pull-to-refresh works.
+- Manual refresh works.
+- Bookmarks work.
+- Reading history works.
+- OPML import and export work.
+- Settings persist.
+- Private workspace creation works.
+- Private workspace selection works.
+- Private workspace deletion works.
+- Private workspace locking works.
+- Search phrase entry works.
+- Double-tap Search entry works.
+- Private authentication works.
+- Native biometric authentication works on supported hardware.
+- Private data remains encrypted at rest.
+- Private workspace data remains isolated.
+- Unexpected process termination does not expose private records.
+- Automated tests pass.
+- The debug APK is generated and installable.
+
+Do not confuse a successful compilation with a completed application.
+
+Do not confuse a working interface with a secure application.
+
+Do not confuse a security design document with verified security behavior.
+
+The final objective is a functional, native, locally operated Android Newsie application with secure private workspaces.
+
+Begin by inspecting the repository. Then implement the application. Continue through testing and APK generation.
+
+END OF PART 2

@@ -1,0 +1,427 @@
+NEWSIE: FULL NATIVE ANDROID IMPLEMENTATION
+ZERO-SHOT IMPLEMENTATION DIRECTIVE
+PART 1 OF 2: PROJECT, ARCHITECTURE, FEATURES, AND PRIVATE WORKSPACES
+
+You are the lead Android architect, senior Kotlin engineer, UI/UX designer, database engineer, and application security engineer for this project.
+
+Your task is to turn the existing Newsie repository into a complete, functional, native Android application.
+
+This is an implementation task, not a planning exercise. Inspect the repository, understand its behavior, create the Android project, implement the application, run available tests, resolve build errors, and produce an installable APK.
+
+Do not stop after producing a plan, mockup, prototype, or partial implementation. Do not ask me to make routine technical decisions. Use sound engineering judgment. Make reasonable decisions, document them, and continue.
+
+1. PROJECT SOURCE
+
+Existing repository:
+https://github.com/aleisteralvear/Newsie
+
+The repository currently contains a React, TypeScript, Vite, Express, and SQLite implementation. Treat this existing application as the functional and visual reference.
+
+Inspect the complete repository before writing code.
+
+Important existing files include:
+- src/App.tsx
+- src/core/common/types.ts
+- src/core/database/newsieDb.ts
+- src/core/database/repositories.ts
+- src/core/network/apiClient.ts
+- src/core/security/workspaceCrypto.ts
+- src/core/security/webauthn.ts
+- src/core/security/urlGuard.ts
+- src/news/feeds/aggregator.ts
+- src/news/parser/feedParser.ts
+- src/news/engine/feedEngine.ts
+- src/sources/discovery/sourceDirectory.ts
+- src/sources/manager/opml.ts
+- src/sources/validation/sourceValidator.ts
+- src/ui/home/HomeScreen.tsx
+- src/ui/search/SearchScreen.tsx
+- src/ui/bookmarks/SavedScreen.tsx
+- src/ui/sources/SourcesScreen.tsx
+- src/ui/settings/SettingsScreen.tsx
+- src/ui/components/ArticleCard.tsx
+- src/ui/components/WorkspaceModal.tsx
+- src/ui/workspace/PrivateAuthModal.tsx
+- src/ui/workspace/PrivateDashboard.tsx
+- src/workspace/manager/workspaceManager.ts
+- SECURITY_AND_THREAT_MODEL.md
+
+Read the existing code. Do not assume that this description replaces source-code inspection.
+
+REPOSITORY PRESERVATION RULE
+
+Create the native Android implementation in a new /android project directory.
+
+Do not delete, overwrite, or casually restructure the existing React application.
+
+The existing application is the reference implementation. Preserve it so that its features, visual design, data models, and security requirements can be compared with the Android version.
+
+The Android application must be independently buildable.
+
+2. PRIMARY OBJECTIVE
+
+Build Newsie as a real native Android application.
+
+This must not be a WebView wrapper. Do not use Capacitor, Cordova, or a WebView as the primary application interface.
+
+Use:
+- Kotlin
+- Jetpack Compose
+- Material 3
+- AndroidX
+- Room
+- SQLCipher for Android database encryption
+- Android Keystore
+- Android BiometricPrompt
+- WorkManager
+- OkHttp
+- A secure RSS/Atom XML parser
+
+Use current stable dependency versions that are compatible with the installed Android Gradle Plugin and Kotlin versions.
+
+Create a proper Gradle project with:
+- settings.gradle.kts
+- Root build.gradle.kts
+- gradle.properties
+- Gradle version catalog where appropriate
+- Gradle wrapper
+- app/build.gradle.kts
+- Android manifest
+- Application class
+- Kotlin source packages
+- Resource directories
+- Unit tests
+- Instrumentation tests
+
+Use the installed Android SDK and build tools when available.
+
+Target the latest stable Android SDK available in the environment. Use a reasonable minimum SDK, preferably API 26 or higher unless a dependency requires a different value.
+
+Set the application name to Newsie.
+
+Use a sensible application ID such as:
+com.aleisteralvear.newsie
+
+The final result must be a real Android APK that can be installed on a physical Android device.
+
+3. APPLICATION ARCHITECTURE
+
+Use a clean, maintainable architecture.
+
+Recommended package structure:
+com.aleisteralvear.newsie
+- data
+  - database
+  - entities
+  - dao
+  - repository
+  - preferences
+- domain
+  - models
+  - usecases
+- network
+  - http
+  - rss
+  - atom
+  - security
+- security
+  - keystore
+  - encryption
+  - biometric
+  - workspaces
+- workers
+- ui
+  - theme
+  - navigation
+  - home
+  - search
+  - saved
+  - sources
+  - settings
+  - workspace
+  - components
+
+Use repositories to separate the UI from data storage and network operations.
+
+Use ViewModels and Kotlin coroutines.
+
+Use StateFlow or another appropriate observable state system.
+
+Do not put database operations, encryption operations, or network requests directly inside Composable functions.
+
+Keep the code modular. Do not create one enormous Activity or ViewModel.
+
+4. NEWSIE CORE FEATURES
+
+Implement the features that already exist in the reference application. Do not remove features simply because this is a native rewrite.
+
+4.1 HOME
+
+Create a clean editorial news feed.
+
+Support:
+- Latest articles.
+- Category filtering.
+- Source filtering where appropriate.
+- Article sorting.
+- Article pagination.
+- Load More.
+- Pull-to-refresh.
+- Manual refresh button.
+- Refresh status.
+- Last updated time.
+- Loading indicators.
+- Empty states.
+- Error states.
+- Offline access to cached articles.
+
+Prevent duplicate articles. Use article fingerprints or another reliable deduplication method.
+
+Preserve article metadata:
+- Title.
+- Publisher.
+- Author.
+- Description.
+- Excerpt.
+- Article URL.
+- Image URL.
+- Publication date.
+- Category.
+- Estimated reading time.
+- Keywords.
+- Bookmark status.
+
+4.2 SEARCH
+
+Implement local article search.
+
+Support these search scopes:
+1. Cached articles.
+2. Selected sources.
+3. All enabled sources.
+
+Search across headline, publisher, category, description, and keywords.
+
+Include optional search history. Allow the user to disable search history and clear existing history.
+
+Search must work offline against cached content.
+
+Search must not save a private access phrase as a normal search query.
+
+4.3 CATEGORIES
+
+Support:
+- Default categories.
+- Custom categories.
+- Create category.
+- Rename category.
+- Delete category.
+- Enable or disable category.
+- Reorder categories.
+- Assign sources to categories.
+
+Preserve existing category definitions where possible.
+
+4.4 SOURCES
+
+Support:
+- Curated source directory.
+- Add custom RSS feed.
+- Add Atom feed.
+- Validate feed.
+- Preview feed.
+- Enable or disable source.
+- Edit source.
+- Delete source.
+- Test source.
+- Assign source to category.
+- Import OPML.
+- Export OPML.
+
+Use the existing source directory as the reference.
+
+Do not invent feed URLs. Preserve verified existing sources. Clearly identify sample or placeholder sources.
+
+Show useful errors when a feed is invalid or unavailable.
+
+4.5 SAVED ARTICLES
+
+Support:
+- Bookmark article.
+- Remove bookmark.
+- Saved article list.
+- Reading history.
+- Open article.
+- Clear reading history.
+
+Keep saved articles and reading history separate for each workspace.
+
+4.6 ARTICLE DISPLAY
+
+Create an attractive article card.
+
+Support editorial and compact layouts. Show images when available. Handle missing images gracefully.
+
+Allow the user to open the original article in an Android Custom Tab or external browser.
+
+Do not silently load untrusted web content inside an unrestricted WebView.
+
+4.7 SETTINGS
+
+Preserve the existing settings where possible.
+
+Include:
+- Light theme.
+- Dark theme.
+- System theme.
+- Editorial layout.
+- Compact layout.
+- Show or hide article images.
+- Text size.
+- Articles per page: 10, 20, 30, 50, or 100.
+- Sort order.
+- Automatic refresh interval.
+- Wi-Fi-only refresh.
+- Breaking-news notifications.
+- Category notifications.
+- Notification frequency.
+- Reading history enabled or disabled.
+- Search history enabled or disabled.
+- Privacy screen option.
+
+Use DataStore for non-sensitive application preferences.
+
+Use Android notification channels.
+
+Request notification permission correctly on Android versions that require it.
+
+Do not promise push notifications unless a real push service is implemented. Local notifications are acceptable for locally detected news events.
+
+5. PRIVATE WORKSPACES
+
+This is a core feature.
+
+Implement private workspaces as separate application-level encrypted environments.
+
+Do not create hidden Android OS user accounts. Do not attempt to hide users from Android Settings.
+
+A private workspace is a secure data environment inside Newsie.
+
+Each private workspace must have its own:
+- Sources.
+- Categories.
+- Articles.
+- Bookmarks.
+- Reading history.
+- Search history.
+- Preferences.
+- Saved feed configurations.
+
+Data from one workspace must never appear in another workspace.
+
+5.1 WORKSPACE MANAGEMENT
+
+Implement a private workspace dashboard.
+
+Support:
+- Create workspace.
+- Select workspace.
+- Unlock workspace.
+- Lock workspace.
+- Lock all workspaces.
+- Rename workspace.
+- Delete workspace.
+- Change workspace passphrase.
+- Change authentication method.
+- Change automatic lock time.
+- View workspace status.
+
+Allow multiple private workspaces.
+
+The dashboard must show private workspace names only after successful private dashboard authentication.
+
+Do not expose private workspace names, IDs, or counts through normal public screens or unauthenticated interfaces.
+
+5.2 HIDDEN ENTRY METHOD A: SEARCH PHRASE
+
+The user can configure a private access phrase.
+
+When the user enters this phrase into the normal Newsie search field and submits it:
+1. Check the phrase locally.
+2. Check it before normal search begins.
+3. Do not send it to a search engine.
+4. Do not save it in search history.
+5. Do not save it in logs.
+6. Do not save it in analytics.
+7. Clear the search field immediately.
+8. Open the private authentication screen if it matches.
+
+The access phrase is an entry trigger only. It is not sufficient authentication to open private workspace data.
+
+Require the configured workspace authentication method after the entry trigger.
+
+Use Unicode NFC normalization.
+
+Support spaces, punctuation, special characters, and emoji.
+
+Retain the existing minimum passphrase policy of eight characters and maximum length of 1024 characters unless a security or platform limitation requires a documented change.
+
+Never store the plaintext access phrase.
+
+Store only a salted Argon2id-derived verifier.
+
+5.3 HIDDEN ENTRY METHOD B: DOUBLE-TAP SEARCH
+
+Implement a double-tap gesture on the Search navigation icon.
+
+Default interval: 350 milliseconds.
+
+Allow configuration between 200 and 800 milliseconds.
+
+A normal single tap must continue to open Search.
+
+A double tap must open the private authentication screen.
+
+Support both phone navigation and larger-screen navigation.
+
+Do not display a visible private-workspace shortcut in normal navigation.
+
+The gesture is not authentication. It is only an entry trigger.
+
+5.4 PRIVATE AUTHENTICATION
+
+Support these authentication methods:
+- Passphrase.
+- Biometric.
+- Biometric plus passphrase.
+
+Use native Android biometric APIs.
+
+Do not use browser WebAuthn. Do not simulate biometric authentication with a Boolean setting or device capability check.
+
+Use:
+- BiometricManager
+- BiometricPrompt
+- AndroidKeyStore
+- AES-GCM cryptographic operations
+- Authentication-bound Keystore keys
+
+Require BIOMETRIC_STRONG for biometric-only workspace protection.
+
+If the device does not support the required biometric security level, disable biometric enrollment and explain why.
+
+Do not silently downgrade security.
+
+Allow passphrase authentication as a separate supported method.
+
+For the both method, require both factors.
+
+Do not allow a biometric prompt alone to bypass the passphrase requirement.
+
+Use clear fallback behavior when biometric enrollment changes or a Keystore key becomes invalidated.
+
+The user must retain a secure passphrase recovery path.
+
+END OF PART 1
+
+Continue with Part 2. Part 2 contains the mandatory native encryption architecture, feed engine, visual design, testing, build requirements, workflow, and final acceptance criteria.
